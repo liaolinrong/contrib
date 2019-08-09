@@ -42,6 +42,7 @@ var (
 	onStart   = flag.String("on-start", "", "Script to run on start, must accept a new line separated list of peers via stdin.")
 	svc       = flag.String("service", "", "Governing service responsible for the DNS records of the domain this pod is in.")
 	namespace = flag.String("ns", "", "The namespace this pod is running in. If unspecified, the POD_NAMESPACE env var is used.")
+	pod       = flag.String("pod", "", "This pod name. If unspecified, the POD_NAME env var is used.")
 	domain    = flag.String("domain", "", "The Cluster Domain which is used by the Cluster, if not set tries to determine it from /etc/resolv.conf file.")
 )
 
@@ -76,10 +77,12 @@ func main() {
 	if ns == "" {
 		ns = os.Getenv("POD_NAMESPACE")
 	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		log.Fatalf("Failed to get hostname: %s", err)
+
+	po := *pod
+	if po == "" {
+		po = os.Getenv("POD_NAME")
 	}
+
 	var domainName string
 
 	// If domain is not provided, try to get it from resolv.conf
@@ -126,20 +129,31 @@ func main() {
 		log.Fatalf("Incomplete args, require -on-change and/or -on-start, -service and -ns or an env var for POD_NAMESPACE.")
 	}
 
-	myName := strings.Join([]string{hostname, *svc, domainName}, ".")
+	myName := ""
+	if po != "" {
+		myName = strings.Join([]string{po, *svc, domainName}, ".")
+	} else {
+		hostname, err := os.Hostname()
+		if err != nil {
+			log.Fatalf("Failed to get hostname: %s", err)
+		}
+		myName = strings.Join([]string{hostname, *svc, domainName}, ".")
+	}
+
 	script := *onStart
 	if script == "" {
 		script = *onChange
 		log.Printf("No on-start supplied, on-change %v will be applied on start.", script)
 	}
 	for newPeers, peers := sets.NewString(), sets.NewString(); script != ""; time.Sleep(pollPeriod) {
+		var err error
 		newPeers, err = lookup(*svc)
 		if err != nil {
 			log.Printf("%v", err)
 			continue
 		}
 		if newPeers.Equal(peers) || !newPeers.Has(myName) {
-			log.Printf("Have not found myself in list yet.\nMy Hostname: %s\nHosts in list: %s", myName, strings.Join(newPeers.List(), ", "))
+			log.Printf("Have not found myself in list yet.\nMy name: %s\nHosts in list: %s", myName, strings.Join(newPeers.List(), ", "))
 			continue
 		}
 		peerList := newPeers.List()
